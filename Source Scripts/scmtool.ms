@@ -1,7 +1,8 @@
 /*
 ========================================
    ** SupCom MaxTool - Jan Van Der Weg **
-          http://www.janvanderweg.com/pro-supcom.php
+          http://www.janvanderweg.com/pro-supcom.php - old site
+          https://github.com/Exotic-Retard/Supcom_Import_Export_Max currently maintained Github Repo.
 
 	Many thanks to:
 		Chris Cookson for his scripts, they taught me a lot!
@@ -10,6 +11,8 @@
 		Jonathan "BeRSeRKeR" Garcia, for his splitting code!
 		
 	SupCom Maxtool:
+	v1.2
+    --[e]Exotic_Retard - added support for smoothgroups, and SCM exported with blender supcom exporter 5.0+
 	v1.1b
 	--Fixed possible bug with exporting animations
 	--Added animation debug dump file
@@ -46,8 +49,8 @@ utility SCMTool "SupCom MaxTool" silentErrors:false
 	group "About:"
 	(
 		bitmap the_bmp fileName:"supcom.bmp" 
-		label Label1 "SupCom MaxTool v1.1b"
-		label Label2 "www.janvanderweg.com"
+		label Label1 "SupCom MaxTool v1.2"
+		label Label2 "https://github.com/Exotic-Retard/Supcom_Import_Export_Max"
 	)
 	
 	group "Import:"
