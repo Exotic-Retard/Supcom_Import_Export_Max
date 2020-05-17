@@ -21,6 +21,7 @@ struct e_SCM_Vert
 	boneindex, -- array of 4 chars - verts can be weighted to up to 4 bones. Supcom only expects boneindex[0] (non organic models)
 	newindex, -- index to mesh vert for getting the bone
 	oldindex, -- index to see if a vert has the same pos
+	SmoothGroup, -- smooth group - currently the first group which isnt 0
 
 	fn WriteVert bstream=
 	(
@@ -141,7 +142,7 @@ struct e_SCM_Bone
 struct e_SCM_Header
 (
 	boneoffset,
-	wbonecount,    
+	wbonecount,	
 	vertoffset,
 	evertoffset, --omitted in supcom1.0, leave as 0
 	vertcount,
@@ -229,7 +230,7 @@ struct SCM_Export
 		format "Debugoptions: %, % ,%\n" debug_bone debug_vert debug_tris
 		if debug_bone == 1 or debug_vert == 1 or debug_tris == 1 then
 		(
-		    debugfilepath = getfilenamepath filename
+			debugfilepath = getfilenamepath filename
 			debugfilefile = getfilenamefile filename
 			tempstring = debugfilepath + debugfilefile + "_debug.txt"
 			
@@ -237,6 +238,54 @@ struct SCM_Export
 		)
 
 		ok
+	),
+	
+    --max returns the smooth groups as an integer(!) and comverting it to a bit array apparently requires this bullshit?
+    fn getFaceSmoothGroupB obj face =
+    (
+        local sgroup_val=getFaceSmoothGroup obj face
+        local sg_bitarray=#{}
+        if sgroup_val < 0 do
+        (
+            sg_bitarray[32]=true
+            sgroup_val -= 2^31
+        )
+        for i = 1 to 31 do
+        (
+            sg_bitarray[i]= (mod sgroup_val 2 > .5)
+            sgroup_val /= 2
+        )
+        return sg_bitarray
+    ),
+    
+	fn CompareSmoothGroups MeshObject Face1 Face2=
+	(
+		local SMGList = getFaceSmoothGroupB MeshObject Face1
+		local SGListCompare = getFaceSmoothGroupB MeshObject Face2
+		local SmoothGroupsUnique = true
+		for i in SMGList while SmoothGroupsUnique do
+		(
+			if ((SGListCompare[i] == 1) and (SMGList[i] == 1)) then --if theyre both part of the same group then they are smoothed together.
+			(
+				SmoothGroupsUnique = false
+			)
+		)
+		return SmoothGroupsUnique
+	),
+	
+	fn GetFirstSmoothGroup MeshObject Face1 =
+	(
+		--find the first smoothing group that is active, defaults to 0 which is also a valid option in this case.
+		local SmoothGroupFound = 0
+		local SMGList = getFaceSmoothGroupB MeshObject Face1
+		for i in SMGList while SmoothGroupFound == 0 do
+		(
+			if (SMGList[i] == 1) then
+			(
+				SmoothGroupFound = i
+			)
+		)
+		return SmoothGroupFound
 	),
 	
 	fn streamClose=
@@ -426,6 +475,9 @@ struct SCM_Export
 				-- Reference to current face vertex & texture coordinate
 				vTri = getFace mesh nFace
 				tTri = getTVFace mesh nFace
+				
+				--save the smooth group of to the vertices
+				local FaceSmoothGroup = GetFirstSmoothGroup mesh nFace
 				-- Resulting face of the process
 				local outFace = Point3 0 0 0
 				-- For each face index...
@@ -444,6 +496,9 @@ struct SCM_Export
 					--get vertex normals
 					--get faces sharing this vert				
 					local vertFaces = meshOp.getFacesUsingVert mesh vTri[i]
+					
+					local FacesSkipped = 0
+					
 					--init normals
 					local tNormal = [0,0,0]
 					local tangent = [0,0,0]
@@ -451,38 +506,49 @@ struct SCM_Export
 					--go through each face and find its normal, tangent and binormal 
 					for j in vertFaces do
 					(
-						--face normal
-						tNormal += getFaceNormal mesh j
-						--tangent and binormal vectors
-						P1 = getVert mesh vTri[1]
-						P2 = getVert mesh vTri[2]
-						P3 = getVert mesh vTri[3]
+						local SkipThisFace = CompareSmoothGroups mesh nFace j
 						
-						UV1 = getTVert mesh tTri[1]
-						UV1 = Point2 UV1.x UV1.y
-						UV2 = getTVert mesh tTri[2]
-						UV2 = Point2 UV2.x UV2.y
-						UV3 = getTVert mesh tTri[3]
-						UV3 = Point2 UV3.x UV3.y
-					
-						Edge1 = P2 - P1
-						Edge2 = P3 - P1
-					
-						Edge1uv = UV2 - UV1
-						Edge2uv = UV3 - UV1
-					
-						cp = ( Edge1uv[2] * Edge2uv[1] ) - ( Edge1uv[1] * Edge2uv[2] )
-						if ( cp != 0.0 ) then
+						--skip any faces that arent using the same smoothing group
+						if (SkipThisFace == true) then
 						(
-							mul = 1.0 / cp
-							tangent += (( Edge1 * -Edge2uv[2] + Edge2 * Edge1uv[2]) * mul )
-						    binormal += (( Edge1 * -Edge2uv[1] + Edge2 * Edge1uv[1]) * mul )
+							FacesSkipped += 1
+						)
+						else
+						(
+							--face normal
+							tNormal += getFaceNormal mesh j
+							--tangent and binormal vectors
+							P1 = getVert mesh vTri[1]
+							P2 = getVert mesh vTri[2]
+							P3 = getVert mesh vTri[3]
+							
+							UV1 = getTVert mesh tTri[1]
+							UV1 = Point2 UV1.x UV1.y
+							UV2 = getTVert mesh tTri[2]
+							UV2 = Point2 UV2.x UV2.y
+							UV3 = getTVert mesh tTri[3]
+							UV3 = Point2 UV3.x UV3.y
+						
+							Edge1 = P2 - P1
+							Edge2 = P3 - P1
+						
+							Edge1uv = UV2 - UV1
+							Edge2uv = UV3 - UV1
+						
+							cp = ( Edge1uv[2] * Edge2uv[1] ) - ( Edge1uv[1] * Edge2uv[2] )
+							if ( cp != 0.0 ) then
+							(
+								mul = 1.0 / cp
+								tangent += (( Edge1 * -Edge2uv[2] + Edge2 * Edge1uv[2]) * mul )
+								binormal += (( Edge1 * -Edge2uv[1] + Edge2 * Edge1uv[1]) * mul )
+							)
 						)
 					)
 					--find average of the normals, tangents and binormals
-					local tNormal = normalize (tNormal / vertFaces.count )
-					local tangent = normalize (tangent / vertFaces.count )
-					local binormal = normalize (binormal / vertFaces.count )
+					local NumberUsedFaces = vertFaces.count - FacesSkipped
+					local tNormal = normalize (tNormal / NumberUsedFaces )
+					local tangent = normalize (tangent / NumberUsedFaces )
+					local binormal = normalize (binormal / NumberUsedFaces )
 					--set normal, tangent and binormal of the vertex
 					outVert.Normal = tNormal
 					outVert.Binormal = binormal
@@ -491,6 +557,7 @@ struct SCM_Export
 					--format " inVert: % \n inTVert: %\n" invert intvert
 		
 					-- Now we have to see if the current vertex already exists in the final list of vertices
+					-- Looping in a loop like this is what makes the script slow. Someone (you) should refactor this away.
 					local indexMatch = 0
 					for v in m_vertlist do
 					(
@@ -511,8 +578,8 @@ struct SCM_Export
 							outVert.oldindex = indexMatch
 						)
 		
-						-- Did we found a vertex equal in vertex & texture coordinates?
-						if (v.position == inVert) and (v.uv1 == inTVert) do
+						-- Did we found a vertex equal in vertex & texture coordinates and should be smoothed?
+						if (v.position == inVert) and (v.uv1 == inTVert) and (v.SmoothGroup == FaceSmoothGroup) do
 						(
 							-- Yes. So we assign the index of the located vertex
 							--format "   Same vert, same tvert: %\n" indexMatch
@@ -542,6 +609,7 @@ struct SCM_Export
 						outVert.uv1 = inTVert
 						outVert.uv2 = inTVert
 						outVert.newIndex = m_vertlist.count + 1
+						outVert.SmoothGroup == FaceSmoothGroup --save the current faces smooth group (0 for none)
 		
 						-- Add the new vertex to the list of m_vertices
 						append m_vertlist outVert
