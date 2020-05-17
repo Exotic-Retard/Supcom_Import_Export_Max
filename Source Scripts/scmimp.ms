@@ -168,6 +168,21 @@ struct SCM_Header
 		ok
 	)
 )	
+
+
+
+
+--this struct stores data for each mesh while we work on it
+struct Split_Mesh
+(
+	split_vertlist=#(),
+	split_trilist=#(),
+	split_texturelist=#(),
+	vertexidmap=#()
+)
+
+
+
 struct SCM_Loader
 (
 	bstream,	--bitsream
@@ -199,6 +214,35 @@ struct SCM_Loader
 		fclose bstream
 		ok
 	),
+    
+    
+    
+    --called with: CreateMesh BoneID MeshData
+	fn CreateMesh BoneID MeshData=
+	(
+        local mesh_name = bonenames[BoneID]
+        --get transform matrix from bone
+        transform = bonelist[BoneID].transform
+        rot = ( bonelist[BoneID].transform as quat )
+        --create a new mesh object
+        new_mesh = mesh pivot:transform.row4 vertices:MeshData.split_vertlist faces:MeshData.split_trilist tverts:MeshData.split_texturelist name:mesh_name
+        --rotate the pivot only
+        RotatePivotOnly new_mesh rot
+        append nodes new_mesh
+
+        --fix uv coordinates
+        if MeshData.split_vertlist.count != 0 then
+        (
+            BuildTVFaces new_mesh
+            for i = 1 to new_mesh.numfaces do (setTVFace new_mesh i (getFace new_mesh i))
+        )
+        --rebuild the mesh object
+        update new_mesh
+	),
+    
+    
+    
+    
 	fn LoadModel=
 	(
 		--Load the contents of the scm file
@@ -214,7 +258,7 @@ struct SCM_Loader
 		)
 		-- Load bonenames
 		fseek bstream 64 #seek_set
-		local tokens = filterString ( ReadFixedString bstream ( header.boneoffset - 64 ) false ) "\tÅ"
+		local tokens = filterString ( ReadFixedString bstream ( header.boneoffset - 64 ) false ) "\tÅ" --this is cursed because it looks for a specific character, which is a very shaky assumption. SCM can accept any padding character.
 		--copy all tokens except the last one into bonenames array. Last token is fourcc SKEL.
 		for i = 1 to ( tokens.count - 1 ) do
 		(
@@ -251,160 +295,106 @@ struct SCM_Loader
 		------------------------------------------------------
 		--Create the mesh objects
 		------------------------------------------------------
-		--sort the verts and tris into seperate per mesh lists
-		local nMesh = 1 --current mesh we are working on
-		local nTris = 1 --tris counter
-		local mesh_vertlist=#()
-		local mesh_trislist=#()
-		local old_vertCount = 0
 		
-		for nVert = 1 to header.vertcount do
-		(
-			--get vertex details
-			local boneindex = ( vertlist[nVert].boneindex + 1 )
-			
-			--if new mesh or last vert, find trislist for this mesh
-			if boneindex != nMesh or nVert == header.vertcount then
-			(
-				-- if vert is last vert
-				if nVert == header.vertcount do
-				(
-					--format "Vertex: %\n" nVert
-					append mesh_vertlist vertlist[nVert]
-					nVert +=1 
-			 		--append mesh_vertlist vertlist[nVert]
-				)
-				--boneindex > nMesh, new mesh found
-				--format "Start of new mesh found, create mesh from 'old' data\n"
-				--format "Verts: %\n" mesh_vertlist.count
-				--format "vertlist: %\n" mesh_vertlist
-				--format "Verts: %\n" mesh_vertlist.count
-				--append vert_markers nVert
-				--find corresponding trislist
-				local end = 0
-				while end == 0 do
-				(
-					--check the vert indexes in the trislist entry and check if it references
-					--any vertices not belonging to the current mesh
-					
-					--get triindex from tris
-					if trislist[nTris] != undefined then
-					(
-						local triindex = trislist[nTris].triindex
-						--format "checking triindex: %\n" triindex
 
-						--find if any entry in triindex doesn't belong to this mesh
-						for i = 1 to 3 do
-						(
-							if triindex[i] >= nVert do
-							(
-								--found an entry >= nVert, this tris belongs to the next mesh
-								end = 1 --stop the search
-							)
-						)
-						if end == 1 then
-						(
-							-- we have found a hit
-							-- don't increment and don't append... do nothing!
-							--format "hit found, stopping"
-						)
-						else
-						(
-							--not hit found, increment nTris and append tris to mesh_trislist
-							--format "\tNo hit adding to list\n"
-							append mesh_trislist trislist[nTris]
-							nTris +=1
-						)
-					)
-					--else, undefined? no more tris to search, something went wrong
-					else
-					(
-						--last tris stop search
-						end = 1
-					)
-				)
-				
-				--format "Tris: %\n" mesh_trislist.count
-				--format "trislist: %\n" mesh_trislist
-				
-				--------------------------------------
-				--create mesh from 'old' vert and tris data
-				--create arrays to pass to the mesh constructor
-				local vert_array=#() -- array that will hold the vertex information
-				local face_array=#() -- array that will hold the triangle list information
-				local tvert_array=#() -- array that will hold vertex texture coordinates
-				local mesh_name = bonenames[nMesh]
-				--format "Mesh: %\n" nMesh
-				-- build vert array
-				
-				for i = 1 to mesh_vertlist.count do
-				(
-					append vert_array mesh_vertlist[i].position
-					append tvert_array mesh_vertlist[i].uv1
-					
-				)
-				-- build triangle list
-				for i = 1 to mesh_trislist.count do
-				(
-					local currentface = mesh_trislist[i].triindex
-					for j = 1 to 3 do
-					(
-						currentface[j] -= old_vertCount
-					)
-					append face_array currentface
-				)
-				--format "vert array: %\n" vert_array
-				--format "face array: %\n" face_array
-				--get transform matrix from bone
-				transform = bonelist[nMesh].transform
-				rot = ( bonelist[nMesh].transform as quat )
-				--create a new mesh object
-				new_mesh = mesh pivot:transform.row4 vertices:vert_array faces:face_array tverts:tvert_array name:mesh_name
-				--rotate the pivot only
-				RotatePivotOnly new_mesh rot
-				append nodes new_mesh
-				old_vertCount += new_mesh.numverts
-
-				--fix tverts
-				--UEF t3 Battleship fix
-				if mesh_vertlist.count != 0 do
-				(
-				--end uef t3 bs fix
-					BuildTVFaces new_mesh
-					for i = 1 to new_mesh.numfaces do (setTVFace new_mesh i (getFace new_mesh i))
-				)
-				--rebuild the mesh object
-				update new_mesh
-				--------------------------------------
-				--reset 
-				mesh_vertlist=#()
-				mesh_trislist=#()
-				--increment nMesh so we can start looking for the next mesh				
-				nMesh +=1
-				--add vert to the new empty mesh_vertlist
-				--format "Vertex: %\n" nVert
-				append mesh_vertlist vertlist[nVert]
-
-				--format "\n"
-			)
+        --
+        --for each bone in the bone list
+        --make an empty table to store the vert lists, texture lists and face lists, and id map
+        --
+        --
+        --
+        --for each face in the face list
+        --look up the bone id of the first vertex in the list and use that as the id
+        --
+        --for each vertex in the face
+        --if the vertex id is in the map then do nothing else
+        --store vertex in the vertex list
+        --store uv in the uv list
+        --store vertex id in the id map
+        --
+        --store the face with the vertex ids set to the id mapping
+        --
+        --id map:
+        --512:1
+        --513:2
+        --516:3
+        --511:4
+        --514:5
+        --517:6
+        --
+        --
+        --
+        --for each bone in the bone list
+        --create the mesh using the stored arrays
+        --
+        
+        
+        --create a list of split meshes, one for each bone
+        local ordered_meshlist=#()
+        local boneMeshData = Split_Mesh()
+        for i = 1 to bonelist.count do
+        (
+            --create a mesh data container for each split mesh, and then fill it in.
+            append ordered_meshlist (deepCopy boneMeshData)
+        )
+        
+        
+        -- fill in data for our split meshes
+        for i = 1 to trislist.count do
+        (
+            local triindex = trislist[i].triindex
+            
+            
+            --look up the bone id for one of our vertices and assume that its the same for the rest
+            --this isnt actually true - SCM supports different bones sharing the same faces
+            --however because we are splitting bones, MAX wont support this so we have to just break it.
+            --use the blender SCM importer if you want this functionality, i guess.
+            local BoneID = vertlist[triindex[1]].boneindex + 1
+            
+            --note: the +1 there is to translate from a 0 index to a 1 index.
+            
+            --use the bone id to determine which mesh to add data to
+            local OurMesh = ordered_meshlist[BoneID]
+            
+            local remappedTrilist = #()
+            --loop through the vertices in our mesh, and fill in their data
+            for j = 1 to 3 do
+            (
+                local vertexID = triindex[j]
+                if OurMesh.vertexidmap[vertexID] == undefined then
+                (
+                    append OurMesh.split_vertlist vertlist[vertexID].position
+                    append OurMesh.split_texturelist vertlist[vertexID].uv1
+                
+                    OurMesh.vertexidmap[vertexID] = OurMesh.split_vertlist.count
+                )
+                append remappedTrilist OurMesh.vertexidmap[vertexID]
+            )
+            
+            --convert array to a vector and then store it in the list, since apparently the mesh needs tris as vectors. whatever.
+            append OurMesh.split_trilist [remappedTrilist[1], remappedTrilist[2], remappedTrilist[3]]
+            
+        )
+        
+        --create a mesh for each entry in the list. if the mesh is empty create a dummy node instead
+        for i = 1 to header.totalbones do
+        (
+            if ordered_meshlist[i].split_vertlist.count > 0 then
+            (
+                CreateMesh i ordered_meshlist[i]
+            )
 			else
 			(
-				--format "Vertex: %\n" nVert
-				--still on the same mesh
-				--append vert to mesh_vertlist
-				append mesh_vertlist vertlist[nVert]
+                --create dummy objects for reference points
+                transmatrix = ( inverse bonelist[i].RestPoseInverse )
+                
+                newdummy = dummy name:bonenames[i] transform:transmatrix
+                newdummy.boxsize = [0.1,0.1,0.1]
+                --newdummy.pos = transmatrix.row4
+                append nodes newdummy
 			)
-		)
-		--create dummy objects for reference points
-		for i = ( header.wbone + 1 ) to header.totalbones do
-		(
-			transmatrix = ( inverse bonelist[i].RestPoseInverse )
-			
-			newdummy = dummy name:bonenames[i] transform:transmatrix
-			newdummy.boxsize = [0.1,0.1,0.1]
-			--newdummy.pos = transmatrix.row4
-			append nodes newdummy
-		)
+        )
+        
 		--link bones
 		for i = 1 to header.totalbones do
 		(
